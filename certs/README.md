@@ -51,7 +51,7 @@ demo.hosts | `- "example.com"` | Set the list of your hosts to generate Let's En
 
 2/ Register your ingress, for example:
 ```
-apiVersion: extensions/v1beta1
+apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: test-ingress

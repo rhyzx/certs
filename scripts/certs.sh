@@ -171,7 +171,7 @@ starter() {
     acme.sh --set-default-ca --server letsencrypt
   fi
 
-  local URI="/apis/extensions/v1beta1"
+  local URI="/apis/networking.k8s.io/v1"
   if [ -n "${K8S_API_URI_NAMESPACE}" ]; then
     URI="${URI}/${K8S_API_URI_NAMESPACE}"
   fi
@@ -442,6 +442,7 @@ add_certs_to_secret() {
 
   SECRET_JSON=$(echo '{}')
   SECRET_JSON=$(echo ${SECRET_JSON} | jq --arg kind "Secret" '. + {kind: $kind}')
+  SECRET_JSON=$(echo ${SECRET_JSON} | jq --arg type "kubernetes.io/tls" '. + {type: $kind}')
   SECRET_JSON=$(echo ${SECRET_JSON} | jq --arg name "${CERTS_SECRET_NAME}" '. + {metadata: { name: $name }}')
   SECRET_JSON=$(echo ${SECRET_JSON} | jq '. + {data: {}}')
   SECRET_JSON=$(echo ${SECRET_JSON} | jq --arg cacert "$(get_file_data_for_secret_json "${ACME_CA_FILE}")" '. * {data: {"ca.crt": $cacert}}')
