@@ -28,7 +28,7 @@ manageAllNamespaces: false
 
 namespacesWhitelist: ""
 
-env: []
+env: {}
 
 secretResourceNames: []
 
