@@ -6,9 +6,9 @@ service:
   type: None
 
 image:
-  registry: mathnao
-  repository: certs
-  tag: 1.1.12
+  registry: ghcr.io
+  repository: rhyzx/certs
+  tag: master
 
 schedule: "0 0,12 * * *"
 
@@ -40,6 +40,6 @@ demo:
     port: 8080
   secretName: demo-ingress-cert
   hosts:
-  - "example.com"
+    - "example.com"
   ingress:
     annotations: {}
