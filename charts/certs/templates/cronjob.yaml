@@ -18,26 +18,4 @@ spec:
         app: {{ template "helper.name" . }}
         release: {{ .Release.Name }}
     spec:
-      backoffLimit: {{ .Values.backoffLimit }}
-      activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
-      ttlSecondsAfterFinished: {{ .Values.ttlSecondsAfterFinished }}
-      template:
-        spec:
-          serviceAccountName: {{ template "helper.fullname" . }}
-          containers:
-          - name: {{ template "helper.fullname" . }}
-            image: {{ template "helper.image" . }}
-            env:
-            - name: ACME_MANAGE_ALL_NAMESPACES
-              value: {{ .Values.manageAllNamespaces | quote }}
-            - name: ACME_NAMESPACES_WHITELIST
-              value: {{ .Values.namespacesWhitelist | quote }}
-            - name: ACME_DEMO_ENABLED
-              value: {{ .Values.demo.enabled | quote }}
-            - name: ACME_DEBUG
-              value: {{ .Values.debug | quote }}
-            {{- range $k, $v := .Values.env }}
-            - name: {{ $k | quote }}
-              value: {{ $v | quote }}
-            {{- end }}
-          restartPolicy: Never
+      {{- include "job" . | nindent 6 }}
