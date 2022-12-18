@@ -8,7 +8,7 @@ service:
 image:
   registry: ghcr.io
   repository: rhyzx/certs
-  tag: master
+  tag: latest
 
 schedule: "0 0,12 * * *"
 
