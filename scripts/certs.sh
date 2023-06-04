@@ -116,8 +116,6 @@ format_res_file() {
 
 get_domain_folder() {
   local DOMAIN_NAME="$1"
-  local IS_ECC_CERTIFICATE="$2"
-  local IS_CUSTOM_DOMAIN="$3"
 
   if [ -z "${DOMAIN_NAME}" ]; then
     return
@@ -126,23 +124,13 @@ get_domain_folder() {
   local DOMAIN_FOLDER
   DOMAIN_FOLDER="/acme.sh/$(echo "${DOMAIN_NAME}")"
   
-  if [ "${IS_ECC_CERTIFICATE}" = "true" ]; then
-    DOMAIN_FOLDER="${DOMAIN_FOLDER}_ecc"
+  if [ -d "${DOMAIN_FOLDER}_ecc" ]; then
+    echo "${DOMAIN_FOLDER}_ecc"
+    return
   fi
-
   if [ -d "${DOMAIN_FOLDER}" ]; then
     echo "${DOMAIN_FOLDER}"
     return
-  fi
-
-  # in case of custom domain, try to find the domain folder
-  if [ "${IS_CUSTOM_DOMAIN}" = "true" ]; then
-    local LATEST_MODIFIED_FOLDER
-    LATEST_MODIFIED_FOLDER=$(ls -td /acme.sh/* | head -1)
-    if [ -n "${LATEST_MODIFIED_FOLDER}" ]; then
-      echo "${LATEST_MODIFIED_FOLDER}"
-      return
-    fi
   fi
 }
 
@@ -346,24 +334,6 @@ generate_cert() {
     ACME_CMD="${CERTS_CMD_TO_USE}"
   fi
 
-  local IS_ECC_CERTIFICATE="false"
-  if [ -n "$(echo ${ACME_CMD} | grep ' --keylength ec-')" ]; then
-    IS_ECC_CERTIFICATE="true"
-  fi
-
-  local IS_CUSTOM_DOMAIN="false"
-  if [ -n "$(echo ${ACME_CMD} | grep ' -d ')" ]; then
-    IS_CUSTOM_DOMAIN="true"
-  fi
-
-  local DOMAIN_FOLDER=$(get_domain_folder "${MAIN_DOMAIN}" "${IS_ECC_CERTIFICATE}" "${IS_CUSTOM_DOMAIN}")
-  debug "domain folder: ${DOMAIN_FOLDER}"
-
-
-  # get current cert hash
-  CURRENT_CERT_HASH=$(get_cert_hash "${DOMAIN_FOLDER}")
-  debug "current cert hash: ${CURRENT_CERT_HASH}"
-
   # pre-cmd
   if [ -n "${CERTS_PRE_CMD}" ]; then
     debug "Running pre-cmd: ${CERTS_PRE_CMD}"
@@ -403,22 +373,12 @@ generate_cert() {
     exit 1
   fi
 
-  # update domain folder with new folder created
-  DOMAIN_FOLDER=$(get_domain_folder "${MAIN_DOMAIN}" "${IS_ECC_CERTIFICATE}" "${IS_CUSTOM_DOMAIN}")
+  DOMAIN_FOLDER=$(get_domain_folder "${MAIN_DOMAIN}")
   debug "domain folder: ${DOMAIN_FOLDER}"
 
-  # get new cert hash
-  NEW_CERT_HASH=$(get_cert_hash "${DOMAIN_FOLDER}")
-  debug "new cert hash: ${NEW_CERT_HASH}"
-
-  # update secrets only if certs has been updated
-  if [ "${CURRENT_CERT_HASH}" != "${NEW_CERT_HASH}" ]; then
-    info "Certificate change, updating..."
-    add_certs_to_secret "${CERT_NAMESPACE}"
-    add_conf_to_secret "${CERT_NAMESPACE}" "${DOMAIN_FOLDER}"
-  else
-    info "No certificate change, nothing to do"
-  fi
+  info "Certificate change, updating..."
+  add_certs_to_secret "${CERT_NAMESPACE}"
+  add_conf_to_secret "${CERT_NAMESPACE}" "${DOMAIN_FOLDER}"
 
   # onsuccess-cmd
   if [ -n "${CERTS_ONSUCCESS_CMD}" ]; then
@@ -484,7 +444,6 @@ load_conf_from_secret() {
   debug "Status code: ${STATUS_CODE}"
 
   if [ "${STATUS_CODE}" = "200" ]; then
-    info "Adding conf"
     IS_SECRET_CONF_ALREADY_EXISTS="true"
     format_res_file "${RES_FILE}"
     local TMP_TAR_FILE=$(mktemp /tmp/tar_file.XXXX)
