@@ -33,8 +33,7 @@ CA_FILE="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
 TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
 CERTS_SECRET_NAME=""
-CONF_SECRET_NAME=""
-IS_SECRET_CONF_ALREADY_EXISTS="false"
+LAST_APPLIED_CONF=""
 ACME_CA_FILE="/root/certs/ca.crt"
 ACME_CERT_FILE="/root/certs/tls.crt"
 ACME_FULLCHAIN_FILE="/root/certs/fullchain.crt"
@@ -179,6 +178,7 @@ starter() {
       unset IFS
 
       CERTS_DNS=$(echo "${secret}" | jq -rc '.metadata.annotations."certs.io/dns"')
+      LAST_APPLIED_CONF=$(echo "${secret}" | jq -rc '.metadata.annotations."certs.io/last-applied-conf"')
       CERTS_CMD_TO_USE=$(echo "${secret}" | jq -rc '.metadata.annotations."certs.io/cmd-to-use"')
       if [ "${CERTS_CMD_TO_USE}" = "null" ]; then
         CERTS_CMD_TO_USE=""
@@ -282,11 +282,9 @@ generate_cert() {
 
   # update global variables
   CERTS_SECRET_NAME="${NAME}"
-  CONF_SECRET_NAME="${NAME}-conf"
-  IS_SECRET_CONF_ALREADY_EXISTS="false"
 
   # get previous conf if it exists
-  load_conf_from_secret "${CERT_NAMESPACE}"
+  unpack_conf "${CERT_NAMESPACE}"
 
   # prepare acme cmd args
   ACME_ARGS="--issue --ca-file '${ACME_CA_FILE}' --cert-file '${ACME_CERT_FILE}' --fullchain-file '${ACME_FULLCHAIN_FILE}' --key-file '${ACME_KEY_FILE}'"
@@ -368,9 +366,8 @@ generate_cert() {
   DOMAIN_FOLDER=$(get_domain_folder "${MAIN_DOMAIN}")
   debug "domain folder: ${DOMAIN_FOLDER}"
 
-  info "Certificate change, updating..."
+  pack_conf "${CERT_NAMESPACE}" "${DOMAIN_FOLDER}"
   add_certs_to_secret "${CERT_NAMESPACE}"
-  add_conf_to_secret "${CERT_NAMESPACE}" "${DOMAIN_FOLDER}"
 
   # onsuccess-cmd
   if [ -n "${CERTS_ONSUCCESS_CMD}" ]; then
@@ -391,66 +388,43 @@ add_certs_to_secret() {
   SECRET_FILE="/root/secret.certs.json"
 
   SECRET_JSON=$(echo '{}')
-  SECRET_JSON=$(echo ${SECRET_JSON} | jq --arg kind "Secret" '. + {kind: $kind}')
-  SECRET_JSON=$(echo ${SECRET_JSON} | jq --arg type "kubernetes.io/tls" '. + {type: $type}')
-  SECRET_JSON=$(echo ${SECRET_JSON} | jq --arg name "${CERTS_SECRET_NAME}" '. + {metadata: { name: $name }}')
-  SECRET_JSON=$(echo ${SECRET_JSON} | jq '. + {data: {}}')
+  SECRET_JSON=$(echo ${SECRET_JSON} | jq --arg conf "$(get_file_data_for_secret_json /root/config.tar)" '. * {metadata: { annotations: { "certs.io/last-applied-conf": $conf } }}')
   SECRET_JSON=$(echo ${SECRET_JSON} | jq --arg cacert "$(get_file_data_for_secret_json "${ACME_CA_FILE}")" '. * {data: {"ca.crt": $cacert}}')
   SECRET_JSON=$(echo ${SECRET_JSON} | jq --arg tlscert "$(get_file_data_for_secret_json "${ACME_FULLCHAIN_FILE}")" '. * {data: {"tls.crt": $tlscert}}')
   SECRET_JSON=$(echo ${SECRET_JSON} | jq --arg tlskey "$(get_file_data_for_secret_json "${ACME_KEY_FILE}")" '. * {data: {"tls.key": $tlskey}}')
 
   echo -e "${SECRET_JSON}" > "${SECRET_FILE}"
 
-  local STATUS_CODE_CHECKER=$(k8s_api_call "GET" "/api/v1/namespaces/${CERT_NAMESPACE}/secrets/${CERTS_SECRET_NAME}" 2>${RES_FILE})
-
-  debug "Status code checker: ${STATUS_CODE_CHECKER}"
-
-  local STATUS_CODE=""
-  if [ "${STATUS_CODE_CHECKER}" != "200" ]; then
-    info "Adding certs"
-    STATUS_CODE=$(k8s_api_call "POST" "/api/v1/namespaces/${CERT_NAMESPACE}/secrets" --data "@${SECRET_FILE}" 2>/dev/null)
-  else
-    info "Updating certs"
-    STATUS_CODE=$(k8s_api_call "PATCH" "/api/v1/namespaces/${CERT_NAMESPACE}/secrets/${CERTS_SECRET_NAME}" --data "@${SECRET_FILE}" 2>/dev/null)
-  fi
+  info "Updating certs"
+  STATUS_CODE=$(k8s_api_call "PATCH" "/api/v1/namespaces/${CERT_NAMESPACE}/secrets/${CERTS_SECRET_NAME}" --data "@${SECRET_FILE}" 2>/dev/null)
 
   debug "Status code: ${STATUS_CODE}"
 
   if [ "${STATUS_CODE}" = "200" ] || [ "${STATUS_CODE}" = "201" ]; then
-    info "Certs sucessfully added"
+    info "Certs sucessfully updated"
   else
-    info "Certs not added"
+    info "Certs not updated"
   fi
 
   rm -f "${SECRET_FILE}"
 }
 
-load_conf_from_secret() {
-  info "Loading conf from secret..."
+unpack_conf() {
+  info "Unpacking conf"
 
   local CERT_NAMESPACE="$1"
-
-  local RES_FILE=$(mktemp /tmp/load_conf.XXXX)
-  local STATUS_CODE=$(k8s_api_call "GET" "/api/v1/namespaces/${CERT_NAMESPACE}/secrets/${CONF_SECRET_NAME}" 2>${RES_FILE})
-
-  debug "Status code: ${STATUS_CODE}"
-
-  if [ "${STATUS_CODE}" = "200" ]; then
-    IS_SECRET_CONF_ALREADY_EXISTS="true"
-    format_res_file "${RES_FILE}"
+  if [ "${LAST_APPLIED_CONF}" != "null" ]; then
     local TMP_TAR_FILE=$(mktemp /tmp/tar_file.XXXX)
-    cat ${RES_FILE} | jq -r '.data.conf' | base64 -d > "${TMP_TAR_FILE}"
+    echo "${LAST_APPLIED_CONF}" | base64 -d > "${TMP_TAR_FILE}"
     tar -xf "${TMP_TAR_FILE}" -C /
     rm -f "${TMP_TAR_FILE}"
   else
-    info "Invalid status code found: ${STATUS_CODE}, configuration not loaded"
+    info "configuration not loaded"
   fi
-
-  rm -f "${RES_FILE}"
 }
 
-add_conf_to_secret() {
-  info "Adding conf to secret..."
+pack_conf() {
+  info "Packing conf"
 
   local CERT_NAMESPACE="$1"
   shift
@@ -467,35 +441,6 @@ add_conf_to_secret() {
   fi
 
   tar -cvf config.tar ${DOMAIN_FOLDER}
-
-  SECRET_FILE="/root/secret.conf.json"
-
-  SECRET_JSON=$(echo '{}')
-  SECRET_JSON=$(echo ${SECRET_JSON} | jq --arg kind "Secret" '. + {kind: $kind}')
-  SECRET_JSON=$(echo ${SECRET_JSON} | jq --arg name "${CONF_SECRET_NAME}" '. + {metadata: { name: $name }}')
-  SECRET_JSON=$(echo ${SECRET_JSON} | jq '. + {data: {}}')
-  SECRET_JSON=$(echo ${SECRET_JSON} | jq --arg conf "$(get_file_data_for_secret_json /root/config.tar)" '. * {data: {conf: $conf}}')
-
-  echo "${SECRET_JSON}" > "${SECRET_FILE}"
-
-  local STATUS_CODE=""
-  if [ "${IS_SECRET_CONF_ALREADY_EXISTS}" = "false" ]; then
-    info "Adding conf"
-    STATUS_CODE=$(k8s_api_call "POST" "/api/v1/namespaces/${CERT_NAMESPACE}/secrets" --data "@${SECRET_FILE}" 2>/dev/null)
-  else
-    info "Updating conf"
-    STATUS_CODE=$(k8s_api_call "PUT" "/api/v1/namespaces/${CERT_NAMESPACE}/secrets/${CONF_SECRET_NAME}" --data "@${SECRET_FILE}" 2>/dev/null)
-  fi
-
-  debug "Status code: ${STATUS_CODE}"
-
-  if [ "${STATUS_CODE}" = "200" ] || [ "${STATUS_CODE}" = "201" ]; then
-    info "Conf sucessfully added"
-  else
-    info "Conf not added"
-  fi
-
-  rm -f "${SECRET_FILE}"
 }
 
 format_cmd() {
