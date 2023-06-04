@@ -48,7 +48,7 @@ CERTS_PRE_CMD=""
 CERTS_POST_CMD=""
 CERTS_ONSUCCESS_CMD=""
 CERTS_ONERROR_CMD=""
-K8S_API_URI_NAMESPACE="namespaces/${NAMESPACE}"
+K8S_API_URI_NAMESPACE="/namespaces/${NAMESPACE}"
 if [ "${ACME_MANAGE_ALL_NAMESPACES}" = "true" ]; then
   K8S_API_URI_NAMESPACE=""
 fi
@@ -157,11 +157,7 @@ starter() {
     acme.sh --set-default-ca --server letsencrypt
   fi
 
-  local URI="/apis/networking.k8s.io/v1"
-  if [ -n "${K8S_API_URI_NAMESPACE}" ]; then
-    URI="${URI}/${K8S_API_URI_NAMESPACE}"
-  fi
-  URI="${URI}/ingresses"
+  local URI="/api/v1${K8S_API_URI_NAMESPACE}/secrets?fieldSelector=type%3Dkubernetes.io%2Ftls&labelSelector=certs.io/enable%3Dtrue"
 
   local RES_FILE=$(mktemp /tmp/init_env.XXXX)
   local STATUS_CODE=$(k8s_api_call "GET" "${URI}" 2>${RES_FILE})
@@ -169,46 +165,46 @@ starter() {
   if [ "${STATUS_CODE}" = "200" ]; then
     format_res_file "${RES_FILE}"
     
-    local INGRESSES_FILTERED=$(cat "${RES_FILE}" | jq -c '.items | .[] | select(.metadata.annotations."acme.kubernetes.io/enable"=="true")')
+    local SECRETS_FILTERED=$(cat "${RES_FILE}" | jq -c '.items | .[]')
     add_to_report "$(cat "${RES_FILE}")"
     rm -f "${RES_FILE}"
 
-    if [ "${INGRESSES_FILTERED}" = "" ]; then
-      info "No matching ingress found"
+    if [ "${SECRETS_FILTERED}" = "" ]; then
+      info "No matching secret found"
       return
     fi
 
     IFS=$'\n'
-    for ingress in ${INGRESSES_FILTERED}; do
+    for secret in ${SECRETS_FILTERED}; do
       unset IFS
 
-      CERTS_DNS=$(echo "${ingress}" | jq -rc '.metadata.annotations."acme.kubernetes.io/dns"')
-      CERTS_CMD_TO_USE=$(echo "${ingress}" | jq -rc '.metadata.annotations."acme.kubernetes.io/cmd-to-use"')
+      CERTS_DNS=$(echo "${secret}" | jq -rc '.metadata.annotations."certs.io/dns"')
+      CERTS_CMD_TO_USE=$(echo "${secret}" | jq -rc '.metadata.annotations."certs.io/cmd-to-use"')
       if [ "${CERTS_CMD_TO_USE}" = "null" ]; then
         CERTS_CMD_TO_USE=""
       fi
 
-      CERTS_PRE_CMD=$(echo "${ingress}" | jq -rc '.metadata.annotations."acme.kubernetes.io/pre-cmd"')
+      CERTS_PRE_CMD=$(echo "${secret}" | jq -rc '.metadata.annotations."certs.io/pre-cmd"')
       if [ "${CERTS_PRE_CMD}" = "null" ]; then
         CERTS_PRE_CMD=""
       fi
 
-      CERTS_POST_CMD=$(echo "${ingress}" | jq -rc '.metadata.annotations."acme.kubernetes.io/post-cmd"')
+      CERTS_POST_CMD=$(echo "${secret}" | jq -rc '.metadata.annotations."certs.io/post-cmd"')
       if [ "${CERTS_POST_CMD}" = "null" ]; then
         CERTS_POST_CMD=""
       fi
 
-      CERTS_ONSUCCESS_CMD=$(echo "${ingress}" | jq -rc '.metadata.annotations."acme.kubernetes.io/on-success-cmd"')
+      CERTS_ONSUCCESS_CMD=$(echo "${secret}" | jq -rc '.metadata.annotations."certs.io/on-success-cmd"')
       if [ "${CERTS_ONSUCCESS_CMD}" = "null" ]; then
         CERTS_ONSUCCESS_CMD=""
       fi
 
-      CERTS_ONERROR_CMD=$(echo "${ingress}" | jq -rc '.metadata.annotations."acme.kubernetes.io/on-error-cmd"')
+      CERTS_ONERROR_CMD=$(echo "${secret}" | jq -rc '.metadata.annotations."certs.io/on-error-cmd"')
       if [ "${CERTS_ONERROR_CMD}" = "null" ]; then
         CERTS_ONERROR_CMD=""
       fi
 
-      local CERT_NAMESPACE=$(echo "${ingress}" | jq -rc '.metadata.namespace')
+      local CERT_NAMESPACE=$(echo "${secret}" | jq -rc '.metadata.namespace')
 
       if [ -n "${ACME_NAMESPACES_WHITELIST}" ]; then
         local is_namespace_found="false"
@@ -245,24 +241,20 @@ starter() {
         return
       fi
 
-      CERTS_ARGS=$(echo "${ingress}" | jq -rc '.metadata.annotations."acme.kubernetes.io/add-args"')
+      CERTS_ARGS=$(echo "${secret}" | jq -rc '.metadata.annotations."certs.io/add-args"')
       if [ "${CERTS_ARGS}" = "null" ] || [  "${CERTS_ARGS}" = "" ]; then
         info "No cmd args found"
         # convert null to empty string
         CERTS_ARGS=""
       fi
 
-      if [ "$(echo "${ingress}" | jq -c '. | select(.metadata.annotations."acme.kubernetes.io/staging"=="true")' | wc -l)" = "1"  ]; then
+      if [ "$(echo "${secret}" | jq -c '. | select(.metadata.annotations."certs.io/staging"=="true")' | wc -l)" = "1"  ]; then
         CERTS_IS_STAGING="true"
       fi
 
-      TLS_INPUTS=$(echo "${ingress}" | jq -c '.spec.tls | .[]')
-      for input in ${TLS_INPUTS}; do
-        local SECRETNAME=$(echo ${input} | jq -rc '.secretName')
-        local HOSTS=$(echo ${input} | jq -rc '.hosts | .[]' | tr '\n' ' ')
-        # no quotes on the last argument please
-        generate_cert "${CERT_NAMESPACE}" "${SECRETNAME}" ${HOSTS}
-      done
+      local SECRETNAME=$(echo "${secret}" | jq -rc '.metadata.name')
+      local HOSTS=$(echo "${secret}" | jq -rc '.metadata.annotations."certs.io/hosts"' | tr ',' ' ')
+      generate_cert "${CERT_NAMESPACE}" "${SECRETNAME}" ${HOSTS}
     done
   else
     info "Invalid status code found: ${STATUS_CODE}"
