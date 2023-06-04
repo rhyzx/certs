@@ -31,15 +31,3 @@ namespacesWhitelist: ""
 env: {}
 
 secretResourceNames: []
-
-demo:
-  enabled: false
-  image: mathnao/light-test-server
-  service:
-    type: ClusterIP
-    port: 8080
-  secretName: demo-ingress-cert
-  hosts:
-    - "example.com"
-  ingress:
-    annotations: {}
